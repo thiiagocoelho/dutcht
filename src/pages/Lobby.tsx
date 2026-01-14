@@ -5,13 +5,20 @@ import { Plus, Users, Lock, Unlock, LogOut, RefreshCw, Key, Loader2 } from 'luci
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Room } from '@/types/game';
+
+// Type for the verify_and_join_room RPC response
+interface JoinRoomResponse {
+  success: boolean;
+  error?: string;
+  message?: string;
+}
 
 const Lobby = () => {
   const navigate = useNavigate();
@@ -21,12 +28,19 @@ const Lobby = () => {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [joinCode, setJoinCode] = useState('');
+  const [joining, setJoining] = useState(false);
   
   // Create room form
   const [roomName, setRoomName] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [password, setPassword] = useState('');
   const [maxPlayers, setMaxPlayers] = useState('4');
+
+  // Password dialog state for joining private rooms
+  const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [pendingRoomId, setPendingRoomId] = useState<string | null>(null);
+  const [pendingRoomIsPrivate, setPendingRoomIsPrivate] = useState(false);
+  const [joinPassword, setJoinPassword] = useState('');
 
   useEffect(() => {
     if (!user) {
@@ -101,21 +115,30 @@ const Lobby = () => {
     if (error) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível criar a sala.' });
     } else if (data) {
-      // Join the room as host
-      await supabase.from('room_players').insert({
-        room_id: data.id,
-        player_id: user.id,
-        position: 0,
+      // Join the room as host using the secure RPC
+      const { data: joinData, error: joinError } = await supabase.rpc('verify_and_join_room', {
+        p_room_id: data.id,
+        p_player_id: user.id,
+        p_password: isPrivate ? password : '',
+        p_position: 0,
       });
-      navigate(`/room/${data.id}`);
+
+      const joinResponse = joinData as unknown as JoinRoomResponse;
+      if (joinError || (joinResponse && !joinResponse.success)) {
+        toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível entrar na sala.' });
+      } else {
+        navigate(`/room/${data.id}`);
+      }
     }
     setCreating(false);
   };
 
-  const joinRoom = async (roomId: string) => {
+  const joinRoom = async (roomId: string, roomPassword: string = '') => {
     if (!user) return;
     
-    // Get current player count
+    setJoining(true);
+    
+    // Get current player count for position
     const { data: players } = await supabase
       .from('room_players')
       .select('position')
@@ -124,32 +147,82 @@ const Lobby = () => {
 
     const nextPosition = (players?.[0]?.position ?? -1) + 1;
     
-    const { error } = await supabase.from('room_players').insert({
-      room_id: roomId,
-      player_id: user.id,
-      position: nextPosition,
+    // Use the secure RPC function that validates password server-side
+    const { data, error } = await supabase.rpc('verify_and_join_room', {
+      p_room_id: roomId,
+      p_player_id: user.id,
+      p_password: roomPassword,
+      p_position: nextPosition,
     });
+
+    setJoining(false);
 
     if (error) {
       toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível entrar na sala.' });
-    } else {
-      navigate(`/room/${roomId}`);
+      return;
+    }
+
+    // Handle RPC response - cast to proper type
+    const response = data as unknown as JoinRoomResponse;
+    if (response && typeof response === 'object') {
+      if (response.success) {
+        setPasswordDialogOpen(false);
+        setJoinPassword('');
+        setPendingRoomId(null);
+        navigate(`/room/${roomId}`);
+      } else if (response.error) {
+        const errorMessage = response.error === 'Invalid password' 
+          ? 'Senha incorreta' 
+          : response.error === 'Room is full'
+          ? 'Sala cheia'
+          : response.error === 'Room is not accepting players'
+          ? 'A sala não está aceitando jogadores'
+          : 'Não foi possível entrar na sala.';
+        toast({ variant: 'destructive', title: 'Erro', description: errorMessage });
+      }
     }
   };
+
+  const handleJoinClick = async (roomId: string, isRoomPrivate: boolean) => {
+    if (isRoomPrivate) {
+      // Show password dialog for private rooms
+      setPendingRoomId(roomId);
+      setPendingRoomIsPrivate(true);
+      setJoinPassword('');
+      setPasswordDialogOpen(true);
+    } else {
+      // Join public room directly
+      await joinRoom(roomId, '');
+    }
+  };
+
+  const handlePasswordSubmit = async () => {
+    if (!pendingRoomId) return;
+    await joinRoom(pendingRoomId, joinPassword);
+  };
+
 
   const joinByCode = async () => {
     if (!joinCode.trim()) return;
     
     const { data, error } = await supabase
       .from('rooms')
-      .select('id')
+      .select('id, is_private')
       .eq('code', joinCode.toUpperCase())
-      .single();
+      .maybeSingle();
 
     if (error || !data) {
       toast({ variant: 'destructive', title: 'Sala não encontrada', description: 'Verifique o código.' });
     } else {
-      joinRoom(data.id);
+      // Check if private room needs password
+      if (data.is_private) {
+        setPendingRoomId(data.id);
+        setPendingRoomIsPrivate(true);
+        setJoinPassword('');
+        setPasswordDialogOpen(true);
+      } else {
+        await joinRoom(data.id, '');
+      }
     }
   };
 
@@ -253,8 +326,8 @@ const Lobby = () => {
               maxLength={6}
               className="glass-input uppercase"
             />
-            <Button onClick={joinByCode} disabled={!joinCode.trim()}>
-              <Key className="w-4 h-4 mr-2" />
+            <Button onClick={joinByCode} disabled={!joinCode.trim() || joining}>
+              {joining ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Key className="w-4 h-4 mr-2" />}
               Entrar
             </Button>
           </div>
@@ -306,7 +379,7 @@ const Lobby = () => {
                       </p>
                     </div>
                   </div>
-                  <Button size="sm" onClick={() => joinRoom(room.id)}>
+                  <Button size="sm" onClick={() => handleJoinClick(room.id, room.isPrivate ?? false)} disabled={joining}>
                     Entrar
                   </Button>
                 </motion.div>
@@ -314,6 +387,53 @@ const Lobby = () => {
             </div>
           )}
         </motion.div>
+
+        {/* Password Dialog for Private Rooms */}
+        <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+          <DialogContent className="glass-card border-white/10">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Lock className="w-5 h-5" />
+                Sala Privada
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 mt-4">
+              <p className="text-sm text-muted-foreground">
+                Esta sala requer uma senha para entrar.
+              </p>
+              <div className="space-y-2">
+                <Label>Senha</Label>
+                <Input
+                  type="password"
+                  value={joinPassword}
+                  onChange={(e) => setJoinPassword(e.target.value)}
+                  placeholder="Digite a senha"
+                  className="glass-input"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handlePasswordSubmit();
+                    }
+                  }}
+                />
+              </div>
+              <div className="flex gap-2">
+                <DialogClose asChild>
+                  <Button variant="outline" className="flex-1">
+                    Cancelar
+                  </Button>
+                </DialogClose>
+                <Button 
+                  onClick={handlePasswordSubmit} 
+                  disabled={joining || !joinPassword.trim()} 
+                  className="flex-1"
+                >
+                  {joining ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Key className="w-4 h-4 mr-2" />}
+                  Entrar
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
