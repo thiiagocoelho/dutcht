@@ -1,1 +1,4 @@
 project_id = "dlfcdrihryjboewxhtlk"
+
+[functions.get-game-state]
+verify_jwt = false
