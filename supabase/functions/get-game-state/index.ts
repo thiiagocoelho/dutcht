@@ -115,20 +115,40 @@ Deno.serve(async (req) => {
     // Other players' hands are returned as card backs (count only, no values)
     const filteredPlayerHands: Record<string, { cards: Card[] | null; cardCount: number }> = {};
     const playerHands = typedGameState.player_hands || {};
+    const playerScores: Record<string, number> = {};
+    
+    // Calculate card value for scoring
+    const getCardValue = (card: Card): number => {
+      const value = card.value;
+      if (value === 'A') return 1;
+      if (value === 'K') return card.suit === 'hearts' || card.suit === 'diamonds' ? -1 : 0;
+      if (value === 'Q' || value === 'J') return 10;
+      return parseInt(value) || 0;
+    };
+    
+    const calculateScore = (cards: Card[]): number => {
+      return cards.reduce((sum, card) => sum + getCardValue(card), 0);
+    };
     
     for (const [playerId, cards] of Object.entries(playerHands)) {
+      const cardArray = cards as Card[];
       if (playerId === user.id) {
         // Current player can see their own cards
         filteredPlayerHands[playerId] = {
-          cards: cards as Card[],
-          cardCount: (cards as Card[])?.length || 0,
+          cards: cardArray,
+          cardCount: cardArray?.length || 0,
         };
       } else {
         // Other players - only show card count, not the actual cards
         filteredPlayerHands[playerId] = {
           cards: null,
-          cardCount: (cards as Card[])?.length || 0,
+          cardCount: cardArray?.length || 0,
         };
+      }
+      
+      // Calculate scores for finished games (all players' scores are public at end)
+      if (typedGameState.phase === 'finished') {
+        playerScores[playerId] = calculateScore(cardArray || []);
       }
     }
 
@@ -153,6 +173,7 @@ Deno.serve(async (req) => {
       discard_pile: typedGameState.discard_pile, // Top of discard is public knowledge
       player_hands: filteredPlayerHands,
       revealed_cards: filteredRevealedCards,
+      player_scores: typedGameState.phase === 'finished' ? playerScores : undefined,
       last_action: typedGameState.last_action,
       updated_at: typedGameState.updated_at,
     };

@@ -139,6 +139,30 @@ export type Database = {
           },
         ]
       }
+      join_attempts: {
+        Row: {
+          attempt_time: string | null
+          id: string
+          player_id: string
+          room_id: string
+          success: boolean
+        }
+        Insert: {
+          attempt_time?: string | null
+          id?: string
+          player_id: string
+          room_id: string
+          success?: boolean
+        }
+        Update: {
+          attempt_time?: string | null
+          id?: string
+          player_id?: string
+          room_id?: string
+          success?: boolean
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -281,15 +305,25 @@ export type Database = {
     }
     Functions: {
       generate_room_code: { Args: never; Returns: string }
-      verify_and_join_room: {
-        Args: {
-          p_password: string
-          p_player_id: string
-          p_position: number
-          p_room_id: string
-        }
-        Returns: Json
-      }
+      verify_and_join_room:
+        | {
+            Args: {
+              p_password: string
+              p_player_id: string
+              p_position: number
+              p_room_id: string
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_password: string
+              p_player_id: string
+              p_position: number
+              p_room_id: string
+            }
+            Returns: Json
+          }
     }
     Enums: {
       [_ in never]: never

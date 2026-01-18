@@ -4,7 +4,8 @@ import { Card } from '@/types/game';
 import { cn } from '@/lib/utils';
 
 interface CardPileProps {
-  cards: Card[];
+  cards?: Card[];
+  cardCount?: number;  // For deck when we only have count
   type: 'deck' | 'discard';
   onClick?: () => void;
   disabled?: boolean;
@@ -13,13 +14,14 @@ interface CardPileProps {
 
 export const CardPile = ({
   cards,
+  cardCount: providedCardCount,
   type,
   onClick,
   disabled = false,
   className,
 }: CardPileProps) => {
-  const topCard = cards[cards.length - 1];
-  const cardCount = cards.length;
+  const topCard = cards?.[cards.length - 1];
+  const cardCount = providedCardCount ?? cards?.length ?? 0;
 
   return (
     <motion.div
@@ -46,7 +48,7 @@ export const CardPile = ({
       {cardCount > 0 ? (
         <PlayingCard
           card={topCard}
-          faceUp={type === 'discard'}
+          faceUp={type === 'discard' && !!topCard}
           size="md"
           disabled={disabled}
         />

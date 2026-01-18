@@ -2,3 +2,6 @@ project_id = "dlfcdrihryjboewxhtlk"
 
 [functions.get-game-state]
 verify_jwt = false
+
+[functions.game-action]
+verify_jwt = false
