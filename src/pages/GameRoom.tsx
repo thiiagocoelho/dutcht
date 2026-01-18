@@ -285,7 +285,7 @@ const GameRoom = () => {
             <div className="col-span-3 flex flex-col gap-4">
               <div className="space-y-3">
                 {otherPlayers.map((player, index) => {
-                  const playerHand = gameState.playerHands[player.id] || [];
+                  const playerCardCount = gameState.playerCardCounts[player.id] || 0;
                   return (
                     <motion.div
                       key={player.id}
@@ -298,8 +298,8 @@ const GameRoom = () => {
                         avatarUrl={player.avatarUrl}
                         isActive={room.currentTurn === player.id}
                         position={getPlayerPosition(index, otherPlayers.length)}
-                        cardCount={playerHand.length}
-                        score={gameState.phase === 'finished' ? calculateScore(playerHand) : undefined}
+                        cardCount={playerCardCount}
+                        score={gameState.phase === 'finished' ? undefined : undefined}
                       />
                     </motion.div>
                   );
@@ -333,7 +333,7 @@ const GameRoom = () => {
               {/* Card piles */}
               <div className="flex items-center gap-12">
                 <CardPile
-                  cards={gameState.deck}
+                  cardCount={gameState.deckCount}
                   type="deck"
                   onClick={handleDeckClick}
                   disabled={!isMyTurn || gameState.phase !== 'playing' || !!drawnCard}
@@ -432,7 +432,7 @@ const GameRoom = () => {
                 {players
                   .map(player => ({
                     ...player,
-                    score: calculateScore(gameState.playerHands[player.id] || []),
+                    score: gameState.playerScores?.[player.id] ?? 0,
                   }))
                   .sort((a, b) => a.score - b.score)
                   .map((player, index) => (

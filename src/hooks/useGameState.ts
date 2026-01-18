@@ -8,16 +8,31 @@ import { Json } from '@/integrations/supabase/types';
 interface GameStateData {
   id: string;
   phase: 'memorizing' | 'playing' | 'dutch_round' | 'finished';
-  deck: Card[];
+  deckCount: number;  // Only deck count, not the actual cards
   discardPile: Card[];
-  playerHands: Record<string, Card[]>;
-  revealedCards: Record<string, number[]>;
+  myHand: Card[];  // Only the current player's cards
+  myRevealedCards: number[];  // Only the current player's revealed cards
+  playerCardCounts: Record<string, number>;  // Other players' card counts only
+  playerScores?: Record<string, number>;  // Scores when game is finished
   lastAction?: GameAction;
 }
 
 interface DrawnCard {
   card: Card;
   source: 'deck' | 'discard';
+}
+
+interface SecureGameStateResponse {
+  id: string;
+  room_id: string;
+  phase: string;
+  deck_count: number;
+  discard_pile: Card[];
+  player_hands: Record<string, { cards: Card[] | null; cardCount: number }>;
+  revealed_cards: Record<string, number[]>;
+  player_scores?: Record<string, number>;
+  last_action: unknown | null;
+  updated_at: string | null;
 }
 
 export const useGameState = (roomId: string | undefined, players: { id: string }[]) => {
@@ -29,47 +44,68 @@ export const useGameState = (roomId: string | undefined, players: { id: string }
   const [selectedCardIndex, setSelectedCardIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Parse game state from DB
-  const parseGameState = useCallback((data: {
-    id: string;
-    phase: string | null;
-    deck: Json | null;
-    discard_pile: Json | null;
-    player_hands: Json | null;
-    revealed_cards: Json | null;
-    last_action: Json | null;
-  }): GameStateData => {
-    return {
-      id: data.id,
-      phase: (data.phase as GameStateData['phase']) || 'memorizing',
-      deck: (data.deck as unknown as Card[]) || [],
-      discardPile: (data.discard_pile as unknown as Card[]) || [],
-      playerHands: (data.player_hands as unknown as Record<string, Card[]>) || {},
-      revealedCards: (data.revealed_cards as Record<string, number[]>) || {},
-      lastAction: data.last_action ? (data.last_action as unknown as GameAction) : undefined,
-    };
-  }, []);
-
-  // Fetch game state
+  // Fetch game state securely via edge function
   const fetchGameState = useCallback(async () => {
-    if (!roomId) return;
+    if (!roomId || !user) return;
 
-    const { data, error } = await supabase
-      .from('game_state')
-      .select('*')
-      .eq('room_id', roomId)
-      .maybeSingle();
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      
+      if (!accessToken) {
+        console.error('No access token available');
+        setLoading(false);
+        return;
+      }
 
-    if (error) {
+      const response = await supabase.functions.invoke('get-game-state', {
+        body: { room_id: roomId },
+      });
+
+      if (response.error) {
+        console.error('Error fetching game state:', response.error);
+        setLoading(false);
+        return;
+      }
+
+      const result = response.data;
+      
+      if (!result?.data) {
+        setGameState(null);
+        setLoading(false);
+        return;
+      }
+
+      const secureState = result.data as SecureGameStateResponse;
+      
+      // Build card counts for all players
+      const playerCardCounts: Record<string, number> = {};
+      for (const [playerId, handInfo] of Object.entries(secureState.player_hands)) {
+        playerCardCounts[playerId] = handInfo.cardCount;
+      }
+
+      // Extract current player's hand
+      const myHandInfo = secureState.player_hands[user.id];
+      const myHand = myHandInfo?.cards || [];
+      const myRevealedCards = secureState.revealed_cards[user.id] || [];
+
+      setGameState({
+        id: secureState.id,
+        phase: secureState.phase as GameStateData['phase'],
+        deckCount: secureState.deck_count,
+        discardPile: secureState.discard_pile || [],
+        myHand,
+        myRevealedCards,
+        playerCardCounts,
+        playerScores: secureState.player_scores,
+        lastAction: secureState.last_action as GameAction | undefined,
+      });
+      setLoading(false);
+    } catch (error) {
       console.error('Error fetching game state:', error);
-      return;
+      setLoading(false);
     }
-
-    if (data) {
-      setGameState(parseGameState(data));
-    }
-    setLoading(false);
-  }, [roomId, parseGameState]);
+  }, [roomId, user]);
 
   // Fetch actions
   const fetchActions = useCallback(async () => {
@@ -155,165 +191,127 @@ export const useGameState = (roomId: string | undefined, players: { id: string }
     }
   }, [roomId, gameState]);
 
-  // Draw card from deck or discard
+  // Draw card from deck or discard via edge function
   const drawCard = useCallback(async (source: 'deck' | 'discard') => {
     if (!roomId || !user || !gameState || drawnCard) return;
 
-    const pile = source === 'deck' ? gameState.deck : gameState.discardPile;
-    if (pile.length === 0) {
-      toast({ variant: 'destructive', title: 'Erro', description: 'Pilha vazia' });
+    // For discard, we can see the top card; for deck, we need to fetch it
+    if (source === 'discard') {
+      if (gameState.discardPile.length === 0) {
+        toast({ variant: 'destructive', title: 'Erro', description: 'Pilha vazia' });
+        return;
+      }
+      const card = gameState.discardPile[gameState.discardPile.length - 1];
+      setDrawnCard({ card, source });
+      
+      // Log action
+      await supabase.from('game_actions').insert({
+        room_id: roomId,
+        player_id: user.id,
+        action_type: 'draw',
+        action_data: { source } as unknown as Json,
+      });
       return;
     }
 
-    const card = pile[pile.length - 1];
-    setDrawnCard({ card, source });
+    // For deck, use edge function to get the card securely
+    if (gameState.deckCount === 0) {
+      toast({ variant: 'destructive', title: 'Erro', description: 'Deck vazio' });
+      return;
+    }
 
-    // Log action
-    await supabase.from('game_actions').insert({
-      room_id: roomId,
-      player_id: user.id,
-      action_type: 'draw',
-      action_data: { source } as unknown as Json,
-    });
+    try {
+      const response = await supabase.functions.invoke('game-action', {
+        body: { room_id: roomId, action: 'draw', source },
+      });
+
+      if (response.error) {
+        console.error('Error drawing card:', response.error);
+        toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível comprar carta' });
+        return;
+      }
+
+      const result = response.data;
+      if (result.success && result.drawnCard) {
+        setDrawnCard({ card: result.drawnCard, source });
+      } else {
+        toast({ variant: 'destructive', title: 'Erro', description: result.error || 'Não foi possível comprar carta' });
+      }
+    } catch (error) {
+      console.error('Error drawing card:', error);
+      toast({ variant: 'destructive', title: 'Erro', description: 'Erro ao comprar carta' });
+    }
   }, [roomId, user, gameState, drawnCard, toast]);
 
-  // Swap drawn card with hand card
+  // Swap drawn card with hand card via edge function
   const swapWithHand = useCallback(async (handIndex: number) => {
     if (!roomId || !user || !gameState || !drawnCard) return;
 
-    const myHand = gameState.playerHands[user.id] || [];
-    const swappedCard = myHand[handIndex];
-    const newHand = [...myHand];
-    newHand[handIndex] = drawnCard.card;
+    try {
+      const response = await supabase.functions.invoke('game-action', {
+        body: { 
+          room_id: roomId, 
+          action: 'swap', 
+          hand_index: handIndex,
+          drawn_card: drawnCard.card,
+          drawn_source: drawnCard.source,
+        },
+      });
 
-    const newPlayerHands = {
-      ...gameState.playerHands,
-      [user.id]: newHand,
-    };
+      if (response.error) {
+        console.error('Error swapping card:', response.error);
+        toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível trocar carta' });
+        return;
+      }
 
-    // Update discard pile with swapped card
-    let newDeck = gameState.deck;
-    let newDiscardPile = gameState.discardPile;
+      const result = response.data;
+      if (!result.success) {
+        toast({ variant: 'destructive', title: 'Erro', description: result.error || 'Não foi possível trocar carta' });
+        return;
+      }
 
-    if (drawnCard.source === 'deck') {
-      // Remove card from deck, add swapped to discard
-      newDeck = gameState.deck.slice(0, -1);
-      newDiscardPile = [...gameState.discardPile, swappedCard];
-    } else {
-      // Already removed from discard, just add swapped
-      newDiscardPile = [...gameState.discardPile.slice(0, -1), swappedCard];
-    }
-
-    const { error } = await supabase
-      .from('game_state')
-      .update({
-        deck: newDeck as unknown as Json,
-        discard_pile: newDiscardPile as unknown as Json,
-        player_hands: newPlayerHands as unknown as Json,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('room_id', roomId);
-
-    if (error) {
+      setDrawnCard(null);
+      setSelectedCardIndex(null);
+      // Game state will update via realtime subscription
+    } catch (error) {
       console.error('Error swapping card:', error);
-      return;
+      toast({ variant: 'destructive', title: 'Erro', description: 'Erro ao trocar carta' });
     }
+  }, [roomId, user, gameState, drawnCard, toast]);
 
-    // Log action
-    await supabase.from('game_actions').insert({
-      room_id: roomId,
-      player_id: user.id,
-      action_type: 'swap',
-    });
-
-    setDrawnCard(null);
-    setSelectedCardIndex(null);
-
-    // Advance turn
-    await advanceTurn();
-  }, [roomId, user, gameState, drawnCard]);
-
-  // Discard drawn card
+  // Discard drawn card via edge function
   const discardDrawnCard = useCallback(async () => {
     if (!roomId || !user || !gameState || !drawnCard) return;
 
-    let newDeck = gameState.deck;
-    let newDiscardPile = gameState.discardPile;
+    try {
+      const response = await supabase.functions.invoke('game-action', {
+        body: { 
+          room_id: roomId, 
+          action: 'discard',
+          drawn_card: drawnCard.card,
+          drawn_source: drawnCard.source,
+        },
+      });
 
-    if (drawnCard.source === 'deck') {
-      newDeck = gameState.deck.slice(0, -1);
-      newDiscardPile = [...gameState.discardPile, drawnCard.card];
-    }
-    // If from discard, it stays there
+      if (response.error) {
+        console.error('Error discarding card:', response.error);
+        toast({ variant: 'destructive', title: 'Erro', description: 'Não foi possível descartar carta' });
+        return;
+      }
 
-    const { error } = await supabase
-      .from('game_state')
-      .update({
-        deck: newDeck as unknown as Json,
-        discard_pile: newDiscardPile as unknown as Json,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('room_id', roomId);
+      const result = response.data;
+      if (!result.success) {
+        toast({ variant: 'destructive', title: 'Erro', description: result.error || 'Não foi possível descartar carta' });
+        return;
+      }
 
-    if (error) {
+      setDrawnCard(null);
+      // Game state will update via realtime subscription
+    } catch (error) {
       console.error('Error discarding card:', error);
-      return;
+      toast({ variant: 'destructive', title: 'Erro', description: 'Erro ao descartar carta' });
     }
-
-    // Log action
-    await supabase.from('game_actions').insert({
-      room_id: roomId,
-      player_id: user.id,
-      action_type: 'discard',
-    });
-
-    setDrawnCard(null);
-    
-    // Advance turn
-    await advanceTurn();
-  }, [roomId, user, gameState, drawnCard]);
-
-  // Advance turn
-  const advanceTurn = useCallback(async () => {
-    if (!roomId || players.length === 0) return;
-
-    // Get current room state
-    const { data: roomData } = await supabase
-      .from('rooms')
-      .select('current_turn, dutch_caller')
-      .eq('id', roomId)
-      .single();
-
-    if (!roomData) return;
-
-    const currentIndex = players.findIndex(p => p.id === roomData.current_turn);
-    const nextIndex = (currentIndex + 1) % players.length;
-    const nextPlayer = players[nextIndex];
-
-    // Check if Dutch round is complete
-    if (roomData.dutch_caller && nextPlayer.id === roomData.dutch_caller) {
-      // End game
-      await supabase
-        .from('game_state')
-        .update({ phase: 'finished', updated_at: new Date().toISOString() })
-        .eq('room_id', roomId);
-
-      await supabase
-        .from('rooms')
-        .update({ status: 'finished' })
-        .eq('id', roomId);
-      return;
-    }
-
-    // Advance to next player
-    await supabase
-      .from('rooms')
-      .update({
-        current_turn: nextPlayer.id,
-        turn_started_at: new Date().toISOString(),
-      })
-      .eq('id', roomId);
-  }, [roomId, players]);
+  }, [roomId, user, gameState, drawnCard, toast]);
 
   // Call Dutch
   const callDutch = useCallback(async () => {
@@ -342,10 +340,7 @@ export const useGameState = (roomId: string | undefined, players: { id: string }
     });
 
     toast({ title: 'DUTCH! 🎉', description: 'Última rodada começou!' });
-    
-    // Advance turn
-    await advanceTurn();
-  }, [roomId, user, gameState, toast, advanceTurn]);
+  }, [roomId, user, gameState, toast]);
 
   // Initial fetch
   useEffect(() => {
@@ -372,17 +367,14 @@ export const useGameState = (roomId: string | undefined, players: { id: string }
     };
   }, [roomId, fetchGameState, fetchActions]);
 
-  const myHand = gameState?.playerHands[user?.id || ''] || [];
-  const myRevealedCards = gameState?.revealedCards[user?.id || ''] || [];
-
   return {
     gameState,
     actions,
     drawnCard,
     selectedCardIndex,
     setSelectedCardIndex,
-    myHand,
-    myRevealedCards,
+    myHand: gameState?.myHand || [],
+    myRevealedCards: gameState?.myRevealedCards || [],
     loading,
     initializeGame,
     endMemorizingPhase,
