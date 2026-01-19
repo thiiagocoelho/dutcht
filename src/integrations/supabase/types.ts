@@ -51,6 +51,13 @@ export type Database = {
             referencedRelation: "rooms"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "chat_messages_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms_public"
+            referencedColumns: ["id"]
+          },
         ]
       }
       game_actions: {
@@ -91,6 +98,13 @@ export type Database = {
             columns: ["room_id"]
             isOneToOne: false
             referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "game_actions_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms_public"
             referencedColumns: ["id"]
           },
         ]
@@ -135,6 +149,13 @@ export type Database = {
             columns: ["room_id"]
             isOneToOne: true
             referencedRelation: "rooms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "game_state_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: true
+            referencedRelation: "rooms_public"
             referencedColumns: ["id"]
           },
         ]
@@ -230,6 +251,13 @@ export type Database = {
             referencedRelation: "rooms"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "room_players_room_id_fkey"
+            columns: ["room_id"]
+            isOneToOne: false
+            referencedRelation: "rooms_public"
+            referencedColumns: ["id"]
+          },
         ]
       }
       rooms: {
@@ -301,7 +329,70 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      rooms_public: {
+        Row: {
+          code: string | null
+          created_at: string | null
+          current_turn: string | null
+          dutch_caller: string | null
+          host_id: string | null
+          id: string | null
+          is_private: boolean | null
+          max_players: number | null
+          name: string | null
+          status: string | null
+          turn_started_at: string | null
+        }
+        Insert: {
+          code?: string | null
+          created_at?: string | null
+          current_turn?: string | null
+          dutch_caller?: string | null
+          host_id?: string | null
+          id?: string | null
+          is_private?: boolean | null
+          max_players?: number | null
+          name?: string | null
+          status?: string | null
+          turn_started_at?: string | null
+        }
+        Update: {
+          code?: string | null
+          created_at?: string | null
+          current_turn?: string | null
+          dutch_caller?: string | null
+          host_id?: string | null
+          id?: string | null
+          is_private?: boolean | null
+          max_players?: number | null
+          name?: string | null
+          status?: string | null
+          turn_started_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rooms_current_turn_fkey"
+            columns: ["current_turn"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rooms_dutch_caller_fkey"
+            columns: ["dutch_caller"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "rooms_host_id_fkey"
+            columns: ["host_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
       generate_room_code: { Args: never; Returns: string }
