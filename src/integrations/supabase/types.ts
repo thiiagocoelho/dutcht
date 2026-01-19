@@ -276,7 +276,7 @@ export type Database = {
           turn_started_at: string | null
         }
         Insert: {
-          code: string
+          code?: string
           created_at?: string | null
           current_turn?: string | null
           dutch_caller?: string | null
@@ -415,6 +415,10 @@ export type Database = {
             }
             Returns: Json
           }
+      verify_room_password: {
+        Args: { hash: string; password: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
