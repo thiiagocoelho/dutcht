@@ -20,6 +20,22 @@ interface JoinRoomResponse {
   message?: string;
 }
 
+// Type for the rooms_public view (excludes password)
+interface RoomPublicRow {
+  id: string;
+  code: string;
+  name: string;
+  host_id: string;
+  is_private: boolean | null;
+  max_players: number | null;
+  status: string | null;
+  created_at: string | null;
+  current_turn: string | null;
+  turn_started_at: string | null;
+  dutch_caller: string | null;
+  room_players?: { count: number }[];
+}
+
 const Lobby = () => {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -63,8 +79,9 @@ const Lobby = () => {
   }, [user, navigate]);
 
   const fetchRooms = async () => {
+    // Use rooms_public view to avoid exposing passwords
     const { data, error } = await supabase
-      .from('rooms')
+      .from('rooms_public' as any)
       .select(`
         *,
         room_players(count)
@@ -76,7 +93,8 @@ const Lobby = () => {
     if (error) {
       console.error('Error fetching rooms:', error);
     } else {
-      setRooms(data?.map(r => ({
+      const rooms = (data as unknown as RoomPublicRow[]) || [];
+      setRooms(rooms.map(r => ({
         id: r.id,
         code: r.code,
         name: r.name,
@@ -84,9 +102,9 @@ const Lobby = () => {
         isPrivate: r.is_private,
         maxPlayers: r.max_players,
         status: r.status as Room['status'],
-        createdAt: new Date(r.created_at),
+        createdAt: new Date(r.created_at || ''),
         players: [],
-      })) || []);
+      })));
     }
     setLoading(false);
   };
@@ -205,8 +223,9 @@ const Lobby = () => {
   const joinByCode = async () => {
     if (!joinCode.trim()) return;
     
+    // Use rooms_public view to avoid exposing passwords
     const { data, error } = await supabase
-      .from('rooms')
+      .from('rooms_public' as any)
       .select('id, is_private')
       .eq('code', joinCode.toUpperCase())
       .maybeSingle();
@@ -214,14 +233,15 @@ const Lobby = () => {
     if (error || !data) {
       toast({ variant: 'destructive', title: 'Sala não encontrada', description: 'Verifique o código.' });
     } else {
+      const roomData = data as unknown as { id: string; is_private: boolean | null };
       // Check if private room needs password
-      if (data.is_private) {
-        setPendingRoomId(data.id);
+      if (roomData.is_private) {
+        setPendingRoomId(roomData.id);
         setPendingRoomIsPrivate(true);
         setJoinPassword('');
         setPasswordDialogOpen(true);
       } else {
-        await joinRoom(data.id, '');
+        await joinRoom(roomData.id, '');
       }
     }
   };
