@@ -16,6 +16,21 @@ interface RoomData {
   dutchCaller: string | null;
 }
 
+// Type for the rooms_public view (excludes password)
+interface RoomPublicRow {
+  id: string;
+  code: string;
+  name: string;
+  host_id: string;
+  is_private: boolean | null;
+  max_players: number | null;
+  status: string | null;
+  created_at: string | null;
+  current_turn: string | null;
+  turn_started_at: string | null;
+  dutch_caller: string | null;
+}
+
 export const useGameRoom = (roomId: string | undefined) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -25,12 +40,12 @@ export const useGameRoom = (roomId: string | undefined) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch room data
+  // Fetch room data - use rooms_public view to avoid exposing passwords
   const fetchRoom = useCallback(async () => {
     if (!roomId) return;
 
     const { data, error } = await supabase
-      .from('rooms')
+      .from('rooms_public' as any)
       .select('*')
       .eq('id', roomId)
       .single();
@@ -40,16 +55,17 @@ export const useGameRoom = (roomId: string | undefined) => {
       return;
     }
 
+    const roomData = data as unknown as RoomPublicRow;
     setRoom({
-      id: data.id,
-      code: data.code,
-      name: data.name,
-      hostId: data.host_id,
-      maxPlayers: data.max_players ?? 4,
-      status: data.status as RoomData['status'],
-      currentTurn: data.current_turn,
-      turnStartedAt: data.turn_started_at ? new Date(data.turn_started_at) : null,
-      dutchCaller: data.dutch_caller,
+      id: roomData.id,
+      code: roomData.code,
+      name: roomData.name,
+      hostId: roomData.host_id,
+      maxPlayers: roomData.max_players ?? 4,
+      status: roomData.status as RoomData['status'],
+      currentTurn: roomData.current_turn,
+      turnStartedAt: roomData.turn_started_at ? new Date(roomData.turn_started_at) : null,
+      dutchCaller: roomData.dutch_caller,
     });
   }, [roomId]);
 
